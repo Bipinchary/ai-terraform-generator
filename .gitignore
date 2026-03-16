@@ -1,0 +1,15 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+.env
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl
+
+# Project Specific
+terraform-output/
+terraform_output/
