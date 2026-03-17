@@ -1,31 +1,90 @@
-from jinja2 import Environment, FileSystemLoader
 import os
+from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-# Gets the directory where terraform_generator.py is located
-current_dir = os.path.dirname(os.path.abspath(__file__))
-# Points to the templates folder relative to this file
-template_path = os.path.join(current_dir, "..", "templates")
-env = Environment(loader=FileSystemLoader(template_path))
+# ── Template environment ───────────────────────────────────────────────────────
+current_dir   = os.path.dirname(os.path.abspath(__file__))
+template_path = os.path.join(current_dir, "templates")
 
-def generate_terraform(architecture):
+env = Environment(
+    loader=FileSystemLoader(template_path),
+    undefined=StrictUndefined,      # blow up loudly if a variable is missing
+    trim_blocks=True,               # remove newline after {% ... %} blocks
+    lstrip_blocks=True,             # strip leading whitespace before {% ... %}
+)
 
-    terraform_code = ""
+# ── Defaults (override via kwargs if needed) ──────────────────────────────────
+DEFAULTS = {
+    "project_name" : "myproject",
+    "region"       : "us-east-1",
+    "vpc_cidr"     : "10.0.0.0/16",
+    "instance_type": "t2.micro",
+    # Amazon Linux 2023 AMI in us-east-1 (update per region as needed)
+    "ami_id"       : "ami-0c02fb55956c7d316",
+}
 
-    if architecture.get("vpc"):
-        template = env.get_template("vpc.tf.j2")
-        terraform_code += template.render(cidr_block="10.0.0.0/16")
+# Cycle through a, b, c … for AZ suffixes
+_AZ_SUFFIXES = list("abcdef")
 
-    for i in range(architecture.get("subnets", 0)):
-        template = env.get_template("subnet.tf.j2")
-        terraform_code += template.render(index=i+1, cidr=f"10.0.{i+1}.0/24")
 
-    for i in range(architecture.get("ec2_instances", 0)):
-        template = env.get_template("ec2.tf.j2")
-        terraform_code += template.render(index=i+1)
+def _build_context(architecture: dict, **overrides) -> dict:
+    """
+    Turn the flat architecture dict produced by InfrastructureSchema
+    into the richer context object that main.tf.j2 expects.
+    """
+    cfg = {**DEFAULTS, **overrides}
 
-    os.makedirs("terraform-output", exist_ok=True)
+    num_subnets   = architecture.get("subnets", 0)
+    num_instances = architecture.get("ec2_instances", 0)
 
-    with open("terraform-output/main.tf", "w") as f:
+    # Build subnet list
+    subnets = [
+        {
+            "index"    : i + 1,
+            "cidr"     : f"10.0.{i + 1}.0/24",
+            "az_suffix": _AZ_SUFFIXES[i % len(_AZ_SUFFIXES)],
+        }
+        for i in range(num_subnets)
+    ]
+
+    # Distribute instances across subnets round-robin (subnet_index is 1-based)
+    instances = []
+    for i in range(num_instances):
+        subnet_index = (i % num_subnets) + 1 if num_subnets else 1
+        instances.append({"index": i + 1, "subnet_index": subnet_index})
+
+    return {
+        "project_name" : cfg["project_name"],
+        "region"       : cfg["region"],
+        "vpc_cidr"     : cfg["vpc_cidr"],
+        "instance_type": cfg["instance_type"],
+        "ami_id"       : cfg["ami_id"],
+        "vpc"          : architecture.get("vpc", False),
+        "subnets"      : subnets,
+        "ec2_instances": instances,
+    }
+
+
+def generate_terraform(architecture: dict, **overrides) -> str:
+    """
+    Render main.tf.j2 with the given architecture dict and return
+    the Terraform source as a string.  Also writes terraform-output/main.tf.
+
+    Parameters
+    ----------
+    architecture : dict
+        Keys: vpc (bool), subnets (int), ec2_instances (int)
+    **overrides :
+        Any DEFAULTS key can be overridden, e.g. region="eu-west-1"
+    """
+    context        = _build_context(architecture, **overrides)
+    template       = env.get_template("main.tf.j2")
+    terraform_code = template.render(**context)
+
+    out_dir = os.path.join(os.getcwd(), "terraform-output")
+    os.makedirs(out_dir, exist_ok=True)
+
+    out_path = os.path.join(out_dir, "main.tf")
+    with open(out_path, "w") as f:
         f.write(terraform_code)
 
     return terraform_code
