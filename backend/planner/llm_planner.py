@@ -1,105 +1,117 @@
 import requests
 import json
 import re
+from typing import Dict
+
 from backend.models import InfrastructureSchema, PlannerResponse
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
+MODEL = "phi3"
 
-# ── Prompt 1: Guard – is this an infra request at all? ────────────────────────
-RELEVANCE_PROMPT = """You are a strict classifier.
-Decide whether the user message is related to cloud infrastructure, 
-AWS resources, networking, servers, or infrastructure-as-code (Terraform, Pulumi, CDK, etc.).
+# ── Prompt ──────────────────────────────────────────────────
+SYSTEM_PROMPT = """You are an AWS infrastructure planner.
 
-Reply with ONLY one word — either:
-  RELEVANT
-  IRRELEVANT
-
-No punctuation. No explanation. Just the single word."""
-
-# ── Prompt 2: Planner – convert infra request → JSON ─────────────────────────
-PLANNER_SYSTEM_PROMPT = """You are an AWS infrastructure planner.
-Your ONLY job is to convert a natural-language infrastructure request into a
-strict JSON object. 
+Return ONLY valid JSON.
+Do NOT include:
+- comments
+- explanations
+- words like integer()
+- any text outside JSON
 
 Rules:
-- Always return ONLY a raw JSON object — no markdown, no backticks, no explanation.
-- "vpc" must be true whenever subnets or EC2 instances are requested (subnets require a VPC).
-- "subnets" must be >= 1 whenever ec2_instances > 0 (instances need a subnet).
-- Cap "subnets" at 6 and "ec2_instances" at 20 unless the user explicitly asks for more.
-- If the user says "a couple", interpret as 2; "a few" as 3; "several" as 4-5.
-- If information is ambiguous, choose the minimal safe default.
+- If not infrastructure → {"relevant": false}
+- Otherwise return:
 
-Return exactly this schema:
 {
-  "vpc": <true | false>,
-  "subnets": <integer 0-6>,
-  "ec2_instances": <integer 0-20>
-}"""
+  "relevant": true,
+  "vpc": true or false,
+  "subnets": number,
+  "ec2_instances": number
+}
 
+Constraints:
+- Use ONLY numbers (e.g., 2, 3, 4) — NOT words or functions
+- vpc must be true if subnets > 0 or ec2_instances > 0
+- subnets >= 1 if ec2_instances > 0
+- "a couple" = 2, "a few" = 3
 
+Your output MUST be valid JSON parsable by json.loads().
+"""
+
+# ── Call Ollama ─────────────────────────────────────────────
 def _call_ollama(prompt: str) -> str:
-    """Raw call to the local Ollama endpoint. Raises on HTTP error."""
-    response = requests.post(
-        OLLAMA_URL,
-        json={"model": "llama3", "prompt": prompt, "stream": False},
-        timeout=60,
-    )
-    response.raise_for_status()
-    return response.json()["response"].strip()
+    try:
+        full_prompt = SYSTEM_PROMPT + "\n\nUser request: " + prompt
+
+        response = requests.post(
+            OLLAMA_URL,
+            json={
+                "model": MODEL,
+                "prompt": full_prompt,
+                "stream": False
+            },
+            timeout=60,
+        )
+
+        response.raise_for_status()
+        return response.json()["response"].strip()
+
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Ollama error: {exc}")
 
 
-def _is_infra_request(user_prompt: str) -> bool:
-    """Return True only if the LLM thinks the prompt is infra-related."""
-    full_prompt = RELEVANCE_PROMPT + f"\n\nUser message: {user_prompt}"
-    answer = _call_ollama(full_prompt).upper()
-    return answer.startswith("RELEVANT")
+# ── Extract JSON safely ─────────────────────────────────────
+def _extract_json(text: str) -> Dict:
+    # Remove comments like // ...
+    text = re.sub(r"//.*", "", text)
 
+    # Replace integer(3) → 3
+    text = re.sub(r"integer\((\d+)\)", r"\1", text)
 
-def _extract_json(text: str) -> dict:
-    """Pull the first {...} block from the model output and parse it."""
+    # Extract JSON block
     match = re.search(r"\{.*?\}", text, re.DOTALL)
     if not match:
-        raise ValueError(f"No JSON object found in model output: {text!r}")
+        raise ValueError(f"No JSON found: {text}")
+
     return json.loads(match.group())
 
 
+# ── Main function ───────────────────────────────────────────
 def prompt_to_architecture(user_prompt: str) -> PlannerResponse:
-    """
-    Main entry point.
-
-    Returns a PlannerResponse:
-      - On success  → PlannerResponse(ok=True,  architecture=InfrastructureSchema(...))
-      - On off-topic → PlannerResponse(ok=False, error="...")
-      - On any error → PlannerResponse(ok=False, error="...")
-    """
-    # ── Step 1: relevance guard ────────────────────────────────────────────────
     try:
-        if not _is_infra_request(user_prompt):
+        raw_output = _call_ollama(user_prompt)
+
+        # Debug (very useful for phi3)
+        print("RAW LLM OUTPUT:", raw_output)
+
+        data = _extract_json(raw_output)
+
+        # ── Relevance check ───────────────────────────────
+        if not data.get("relevant", False):
             return PlannerResponse(
                 ok=False,
-                error=(
-                    "Your request doesn't appear to be related to cloud infrastructure. "
-                    "Please describe what AWS resources you need — for example: "
-                    "'I need a VPC with 2 subnets and 3 EC2 instances.'"
-                ),
+                error="Not an infrastructure-related request"
             )
-    except requests.RequestException as exc:
-        return PlannerResponse(ok=False, error=f"LLM service unavailable: {exc}")
 
-    # ── Step 2: convert prompt → JSON ──────────────────────────────────────────
-    try:
-        full_prompt = PLANNER_SYSTEM_PROMPT + f"\n\nUser request: {user_prompt}"
-        raw = _call_ollama(full_prompt)
-        data = _extract_json(raw)
-    except requests.RequestException as exc:
-        return PlannerResponse(ok=False, error=f"LLM service unavailable: {exc}")
-    except (ValueError, json.JSONDecodeError) as exc:
-        return PlannerResponse(ok=False, error=f"LLM returned unparseable output: {exc}")
+        # Remove helper field
+        data.pop("relevant", None)
 
-    # ── Step 3: validate with Pydantic ─────────────────────────────────────────
-    try:
+        # ── Validate schema ───────────────────────────────
         architecture = InfrastructureSchema(**data)
-    except Exception as exc:          # pydantic ValidationError
-        return PlannerResponse(ok=False, error=f"Schema validation failed: {exc}")
 
-    return PlannerResponse(ok=True, architecture=architecture)
+        return PlannerResponse(ok=True, architecture=architecture)
+
+    except RuntimeError as exc:
+        return PlannerResponse(ok=False, error=str(exc))
+
+    except (ValueError, json.JSONDecodeError) as exc:
+        return PlannerResponse(
+            ok=False,
+            error=f"Invalid JSON from model: {exc}"
+        )
+
+    except Exception as exc:
+        return PlannerResponse(
+            ok=False,
+            error=f"Validation failed: {exc}"
+        )

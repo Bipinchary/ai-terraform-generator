@@ -3,7 +3,8 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 # ── Template environment ───────────────────────────────────────────────────────
 current_dir   = os.path.dirname(os.path.abspath(__file__))
-template_path = os.path.join(current_dir, "templates")
+template_path = os.path.join(current_dir, "..", "templates")
+template_path = os.path.abspath(template_path)
 
 env = Environment(
     loader=FileSystemLoader(template_path),
@@ -84,7 +85,7 @@ def generate_terraform(architecture: dict, **overrides) -> str:
     os.makedirs(out_dir, exist_ok=True)
 
     out_path = os.path.join(out_dir, "main.tf")
-    with open(out_path, "w") as f:
+    with open(out_path, "w", encoding="utf-8") as f:
         f.write(terraform_code)
 
     return terraform_code
