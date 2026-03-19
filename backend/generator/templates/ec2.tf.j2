@@ -1,0 +1,4 @@
+resource "aws_instance" "web{{index}}" {
+  instance_type = "t2.micro"
+  subnet_id = aws_subnet.public1.id
+}
