@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from backend.generator.terraform_generator import generate_terraform
 from backend.planner.llm_planner import prompt_to_architecture
 from backend.validator.infra_validator import validate
-from backend.core.optimizer import optimize
+from backend.core.optimizer.optimizer import optimize
 
 app = FastAPI(
     title="AI Terraform Generator",
@@ -31,7 +31,7 @@ def generate(request: GenerateRequest):
         return JSONResponse(status_code=400, content={"error": result.error})
 
     # Step 2: Optimize
-    architecture, optimizations = optimize(result.architecture)
+    architecture, optimizations, decisions = optimize(result.architecture)
 
     # Step 3: Validate
     warnings = validate(architecture)
@@ -48,6 +48,7 @@ def generate(request: GenerateRequest):
     return {
         "architecture" : architecture.model_dump(),
         "optimizations": optimizations,
+        "decisions"    : decisions,
         "warnings"     : warnings,
         "terraform"    : terraform_code,
     }

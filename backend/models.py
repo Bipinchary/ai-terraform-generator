@@ -105,13 +105,15 @@ class PlannerResponse(BaseModel):
     error: Optional[str] = None
 
 
+class Decision(BaseModel):
+    action: str
+    reason: str  
 class GenerateResponse(BaseModel):
     architecture: dict
     warnings: List[str]
     optimizations: List[str]
+    decisions: List[Decision]
     terraform: str
 
 
-class Decision(BaseModel):
-    action: str
-    reason: str    
+  
