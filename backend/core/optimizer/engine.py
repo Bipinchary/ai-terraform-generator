@@ -15,8 +15,8 @@ def run_rules(plan: InfrastructureSchema) -> Tuple[InfrastructureSchema, List[Di
         for rule in sorted_rules:
             result = rule.apply(plan)
 
-            if result:
+            if result and result not in decisions:
                 decisions.append(result)
-                notes.append(f"{rule.name} applied")
+                notes.append(result["action"].replace("_", " ").capitalize())
 
     return plan, decisions, notes
