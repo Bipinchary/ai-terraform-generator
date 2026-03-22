@@ -1,5 +1,17 @@
-from typing import Optional, Dict
+from typing import Optional, Dict, Callable
 from backend.models import InfrastructureSchema
+
+
+
+
+class Rule:
+    def __init__(self, name: str, priority: int, func: Callable):
+        self.name = name
+        self.priority = priority
+        self.func = func
+
+    def apply(self, plan: InfrastructureSchema) -> Optional[Dict]:
+        return self.func(plan)
 
 
 def rule_autoscaling_requires_lb(plan: InfrastructureSchema) -> Optional[Dict]:
@@ -61,3 +73,19 @@ def rule_instance_type_selection(plan: InfrastructureSchema) -> Optional[Dict]:
             "action": "upgrade_instance_type",
             "reason": "Production workload requires better performance"
         }
+    
+
+
+RULES = [
+    Rule("database_rule", 10, rule_database_private_subnet),
+
+    Rule("ec2_scaling_rule", 20, rule_large_ec2_needs_autoscaling),
+
+    Rule("autoscaling_lb_rule", 30, rule_autoscaling_requires_lb),
+
+    Rule("nat_rule", 40, rule_private_subnet_needs_nat),
+
+    Rule("lb_subnet_rule", 50, rule_lb_requires_multiple_subnets),
+
+    Rule("instance_type_rule", 60, rule_instance_type_selection),
+]   
