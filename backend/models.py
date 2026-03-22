@@ -110,3 +110,8 @@ class GenerateResponse(BaseModel):
     warnings: List[str]
     optimizations: List[str]
     terraform: str
+
+
+class Decision(BaseModel):
+    action: str
+    reason: str    
