@@ -35,6 +35,13 @@ def rule_database_private_subnet(plan: InfrastructureSchema) -> Optional[Dict]:
             "reason": "Database should not be publicly accessible"
         }
 
+def rule_secure_database(plan: InfrastructureSchema) -> Optional[Dict]:
+    if plan.database:
+        plan.db_private = True
+        return {
+            "action": "secure_database",
+            "reason": "Databases must not be publicly accessible"
+        }
 
 def rule_private_subnet_needs_nat(plan: InfrastructureSchema) -> Optional[Dict]:
     
@@ -88,6 +95,8 @@ def rule_instance_type_selection(plan: InfrastructureSchema) -> Optional[Dict]:
 
 
 RULES = [
+    Rule("secure_db_rule", 5, rule_secure_database),
+
     Rule("database_rule", 10, rule_database_private_subnet),
 
     Rule("ec2_scaling_rule", 20, rule_large_ec2_needs_autoscaling),

@@ -30,6 +30,12 @@ variable "instance_type" {
   default     = "{{ instance_type }}"
 }
 
+variable "allowed_ssh_cidr" {
+  description = "Allowed IP for SSH"
+  type        = string
+  default     = "0.0.0.0/0" # user should override
+}
+
 # ------------------------------------------------------------
 # Provider
 # ------------------------------------------------------------
@@ -218,7 +224,7 @@ resource "aws_security_group" "ec2" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [var.allowed_ssh_cidr]
     description = "SSH"
   }
 
@@ -252,13 +258,18 @@ resource "aws_security_group" "ec2" {
 resource "aws_instance" "web{{ instance.index }}" {
   ami                    = data.aws_ami.latest_amazon_linux.id
   instance_type          = var.instance_type
-  subnet_id              = aws_subnet.public{{ instance.subnet_index }}.id
+  subnet_id     = {% if load_balancer %}
+    aws_subnet.private{{ instance.subnet_index }}.id
+  {% else %}
+    aws_subnet.public{{ instance.subnet_index }}.id
+  {% endif %}
   vpc_security_group_ids = [aws_security_group.ec2.id]
 
   root_block_device {
     volume_size           = 20
     volume_type           = "gp3"
     delete_on_termination = true
+    encrypted = true
   }
 
   tags = {
@@ -384,6 +395,7 @@ resource "aws_launch_template" "main" {
       volume_size           = 20
       volume_type           = "gp3"
       delete_on_termination = true
+      encrypted = true
     }
   }
 
@@ -424,6 +436,13 @@ resource "aws_autoscaling_group" "main" {
 # ------------------------------------------------------------
 # RDS — {{ db_engine }}
 # ------------------------------------------------------------
+
+resource "random_password" "db" {
+  length           = 16
+  special          = true
+  override_special = "!#$%&*()-_=+[]{}<>:?"
+}
+
 resource "aws_db_subnet_group" "main" {
   name       = "${var.project_name}-db-subnet-group"
   subnet_ids = [{% for subnet in private_subnets %}aws_subnet.private{{ subnet.index }}.id{% if not loop.last %}, {% endif %}{% endfor %}]
@@ -462,9 +481,11 @@ resource "aws_db_instance" "main" {
   storage_type           = "gp3"
   db_name                = replace("${var.project_name}", "-", "_")
   username               = "admin"
-  password               = "ChangeMe123!"
+  password               = random_password.db.result
   db_subnet_group_name   = aws_db_subnet_group.main.name
   vpc_security_group_ids = [aws_security_group.rds.id]
+  publicly_accessible = false
+  storage_encrypted = true
   multi_az               = false
   skip_final_snapshot    = true
   deletion_protection    = false
@@ -474,7 +495,12 @@ resource "aws_db_instance" "main" {
     ManagedBy = "ai-terraform-generator"
   }
 }
-
+# 3. Add an output so you can actually find the password later!
+output "db_password" {
+  description = "The auto-generated password for the DB"
+  value       = random_password.db.result
+  sensitive   = true
+} 
 {% endif %}
 # ------------------------------------------------------------
 # Outputs
