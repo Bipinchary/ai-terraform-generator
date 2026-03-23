@@ -16,6 +16,10 @@ class Rule:
 
 def rule_autoscaling_requires_lb(plan: InfrastructureSchema) -> Optional[Dict]:
     if plan.autoscaling and not plan.load_balancer:
+        # Skip LB if cost optimized
+        if plan.cost_optimized:
+            return None
+
         plan.load_balancer = True
         return {
             "action": "add_load_balancer",
@@ -33,6 +37,10 @@ def rule_database_private_subnet(plan: InfrastructureSchema) -> Optional[Dict]:
 
 
 def rule_private_subnet_needs_nat(plan: InfrastructureSchema) -> Optional[Dict]:
+    
+    if plan.cost_optimized:
+        return None
+
     if plan.private_subnets > 0 and not plan.nat_gateway:
         plan.nat_gateway = True
         return {
@@ -58,21 +66,24 @@ def rule_large_ec2_needs_autoscaling(plan: InfrastructureSchema) -> Optional[Dic
             "reason": f"{plan.ec2_instances} instances detected — enabling autoscaling for resilience"
         }
 
-
 def rule_instance_type_selection(plan: InfrastructureSchema) -> Optional[Dict]:
     if plan.cost_optimized:
-        plan.instance_type = "t3.micro"
-        return {
-            "action": "choose_instance_type",
-            "reason": "Cost optimization requested"
-        }
+        if plan.instance_type != "t3.micro":
+            plan.instance_type = "t3.micro"
+            return {
+                "action": "choose_instance_type",
+                "reason": "Cost optimization requested"
+            }
+        return None
 
-    if plan.autoscaling or plan.load_balancer:
+    if (plan.autoscaling or plan.load_balancer) and plan.instance_type == "t3.micro":
         plan.instance_type = "t3.small"
         return {
             "action": "upgrade_instance_type",
             "reason": "Production workload requires better performance"
         }
+
+    return None
     
 
 
