@@ -258,10 +258,10 @@ resource "aws_security_group" "ec2" {
 resource "aws_instance" "web{{ instance.index }}" {
   ami                    = data.aws_ami.latest_amazon_linux.id
   instance_type          = var.instance_type
-  subnet_id     = {% if load_balancer %}
-    aws_subnet.private{{ instance.subnet_index }}.id
-  {% else %}
+  subnet_id = {% if load_balancer %}
     aws_subnet.public{{ instance.subnet_index }}.id
+  {% else %}
+    aws_subnet.private{{ instance.subnet_index }}.id
   {% endif %}
   vpc_security_group_ids = [aws_security_group.ec2.id]
 
@@ -385,7 +385,7 @@ resource "aws_launch_template" "main" {
   instance_type = var.instance_type
 
   network_interfaces {
-    associate_public_ip_address = true
+    associate_public_ip_address = false
     security_groups             = [aws_security_group.ec2.id]
   }
 
