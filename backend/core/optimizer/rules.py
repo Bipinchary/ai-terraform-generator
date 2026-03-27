@@ -36,11 +36,11 @@ def rule_database_private_subnet(plan: InfrastructureSchema) -> Optional[Dict]:
         }
 
 def rule_secure_database(plan: InfrastructureSchema) -> Optional[Dict]:
-    if plan.database:
+    if plan.database and not plan.db_private:
         plan.db_private = True
         return {
             "action": "secure_database",
-            "reason": "Databases must not be publicly accessible"
+            "reason": "Database must not be publicly accessible"
         }
 
 def rule_private_subnet_needs_nat(plan: InfrastructureSchema) -> Optional[Dict]:
